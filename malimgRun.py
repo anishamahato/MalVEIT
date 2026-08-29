@@ -1694,4 +1694,545 @@ print(
 
 
 
+# ============================================================
+# ROC CURVE FOR MALVEIT ON MALIMG DATASET
+# Multiclass One-vs-Rest ROC Analysis
+# ============================================================
+
+import torch
+import numpy as np
+import matplotlib.pyplot as plt
+
+from sklearn.preprocessing import label_binarize
+from sklearn.metrics import (
+    roc_curve,
+    auc,
+    roc_auc_score
+)
+
+
+# ============================================================
+# 1. Set model to evaluation mode
+# ============================================================
+
+model.eval()
+
+print("Device:", device)
+
+
+# ============================================================
+# 2. Get class names
+# ============================================================
+# If your DataLoader was created using ImageFolder:
+#
+# train_dataset.classes
+#
+# Change train_dataset to val_dataset/test_dataset if required.
+# ============================================================
+
+try:
+    class_names = val_dataset.classes
+except:
+    try:
+        class_names = test_dataset.classes
+    except:
+        class_names = [
+            f"Class {i+1}"
+            for i in range(25)
+        ]
+
+
+num_classes = len(class_names)
+
+print("Number of classes:", num_classes)
+print("Classes:")
+
+for i, name in enumerate(class_names):
+    print(i, ":", name)
+
+
+# ============================================================
+# 3. Select validation/test DataLoader
+# ============================================================
+#
+# Use your validation loader here.
+#
+# If your loader is called test_loader, replace:
+#
+#     val_loader
+#
+# with:
+#
+#     test_loader
+# ============================================================
+
+roc_loader = val_loader
+
+
+# ============================================================
+# 4. Store predictions and true labels
+# ============================================================
+
+all_labels = []
+all_probabilities = []
+
+
+print("\nStarting ROC evaluation...")
+
+
+with torch.no_grad():
+
+    for batch_idx, (images, labels) in enumerate(
+        roc_loader
+    ):
+
+        images = images.to(device)
+        labels = labels.to(device)
+
+        # ----------------------------------------------------
+        # MalVEIT forward pass
+        # ----------------------------------------------------
+
+        output = model(images)
+
+        # MalVEIT:
+        #
+        # output[0] = classification logits
+        # output[1] = reconstruction
+        # output[2] = mu
+        # output[3] = logvar
+        # output[4] = mask
+
+        logits = output[0]
+
+        # ----------------------------------------------------
+        # Convert logits to probabilities
+        # ----------------------------------------------------
+
+        probabilities = torch.softmax(
+            logits,
+            dim=1
+        )
+
+        # ----------------------------------------------------
+        # Store results
+        # ----------------------------------------------------
+
+        all_labels.append(
+            labels.cpu().numpy()
+        )
+
+        all_probabilities.append(
+            probabilities.cpu().numpy()
+        )
+
+        if (batch_idx + 1) % 10 == 0:
+
+            print(
+                f"Processed batch {batch_idx + 1}"
+            )
+
+
+# ============================================================
+# 5. Concatenate all batches
+# ============================================================
+
+y_true = np.concatenate(
+    all_labels,
+    axis=0
+)
+
+y_score = np.concatenate(
+    all_probabilities,
+    axis=0
+)
+
+
+print("\nEvaluation completed.")
+
+print(
+    "True labels shape:",
+    y_true.shape
+)
+
+print(
+    "Prediction shape:",
+    y_score.shape
+)
+
+
+# ============================================================
+# 6. Convert labels to one-hot representation
+# ============================================================
+
+y_true_bin = label_binarize(
+    y_true,
+    classes=np.arange(num_classes)
+)
+
+
+print(
+    "One-hot label shape:",
+    y_true_bin.shape
+)
+
+
+# ============================================================
+# 7. Calculate ROC curves for every class
+# ============================================================
+
+fpr = {}
+tpr = {}
+roc_auc = {}
+
+
+for i in range(num_classes):
+
+    fpr[i], tpr[i], _ = roc_curve(
+        y_true_bin[:, i],
+        y_score[:, i]
+    )
+
+    roc_auc[i] = auc(
+        fpr[i],
+        tpr[i]
+    )
+
+
+# ============================================================
+# 8. Calculate Micro-average ROC
+# ============================================================
+
+fpr["micro"], tpr["micro"], _ = roc_curve(
+    y_true_bin.ravel(),
+    y_score.ravel()
+)
+
+roc_auc["micro"] = auc(
+    fpr["micro"],
+    tpr["micro"]
+)
+
+
+# ============================================================
+# 9. Calculate Macro-average ROC
+# ============================================================
+
+all_fpr = np.unique(
+    np.concatenate(
+        [
+            fpr[i]
+            for i in range(num_classes)
+        ]
+    )
+)
+
+
+mean_tpr = np.zeros_like(
+    all_fpr
+)
+
+
+for i in range(num_classes):
+
+    mean_tpr += np.interp(
+        all_fpr,
+        fpr[i],
+        tpr[i]
+    )
+
+
+mean_tpr /= num_classes
+
+
+fpr["macro"] = all_fpr
+
+tpr["macro"] = mean_tpr
+
+roc_auc["macro"] = auc(
+    fpr["macro"],
+    tpr["macro"]
+)
+
+
+# ============================================================
+# 10. Overall AUROC using sklearn
+# ============================================================
+
+macro_auc = roc_auc_score(
+    y_true_bin,
+    y_score,
+    average="macro",
+    multi_class="ovr"
+)
+
+micro_auc = roc_auc_score(
+    y_true_bin,
+    y_score,
+    average="micro",
+    multi_class="ovr"
+)
+
+
+print("\n==============================================")
+print("ROC-AUC RESULTS")
+print("==============================================")
+
+print(
+    f"Macro-Average AUROC : {macro_auc:.4f}"
+)
+
+print(
+    f"Micro-Average AUROC : {micro_auc:.4f}"
+)
+
+
+# ============================================================
+# 11. Print AUROC for each malware family
+# ============================================================
+
+print("\nClass-wise AUROC:")
+
+for i in range(num_classes):
+
+    print(
+        f"{class_names[i]:25s} : "
+        f"{roc_auc[i]:.4f}"
+    )
+
+
+# ============================================================
+# 12. Publication-quality ROC figure
+# ============================================================
+
+fig, ax = plt.subplots(
+    figsize=(10, 9),
+    dpi=600
+)
+
+
+# ============================================================
+# 13. Plot individual class ROC curves
+# ============================================================
+#
+# Thin lines are used for individual malware families.
+# The macro and micro curves are emphasized.
+# ============================================================
+
+for i in range(num_classes):
+
+    ax.plot(
+        fpr[i],
+        tpr[i],
+        linewidth=1.2,
+        alpha=0.45
+    )
+
+
+# ============================================================
+# 14. Plot Macro-average ROC
+# ============================================================
+
+ax.plot(
+    fpr["macro"],
+    tpr["macro"],
+    linewidth=3.0,
+    label=(
+        f"Macro-average "
+        f"(AUROC = {roc_auc['macro']:.4f})"
+    )
+)
+
+
+# ============================================================
+# 15. Plot Micro-average ROC
+# ============================================================
+
+ax.plot(
+    fpr["micro"],
+    tpr["micro"],
+    linewidth=3.0,
+    linestyle="--",
+    label=(
+        f"Micro-average "
+        f"(AUROC = {roc_auc['micro']:.4f})"
+    )
+)
+
+
+# ============================================================
+# 16. Random classifier reference line
+# ============================================================
+
+ax.plot(
+    [0, 1],
+    [0, 1],
+    linestyle=":",
+    linewidth=2.0,
+    label="Random classifier"
+)
+
+
+# ============================================================
+# 17. Axis labels
+# ============================================================
+
+ax.set_xlabel(
+    "False Positive Rate",
+    fontsize=18
+)
+
+ax.set_ylabel(
+    "True Positive Rate",
+    fontsize=18
+)
+
+
+# ============================================================
+# 18. Title
+# ============================================================
+
+ax.set_title(
+    "ROC Curve for MalVEIT on Malimg Dataset",
+    fontsize=20,
+    fontweight="bold",
+    pad=15
+)
+
+
+# ============================================================
+# 19. Axis limits
+# ============================================================
+
+ax.set_xlim(
+    [0.0, 1.0]
+)
+
+ax.set_ylim(
+    [0.0, 1.02]
+)
+
+
+# ============================================================
+# 20. Tick formatting
+# ============================================================
+
+ax.tick_params(
+    axis="both",
+    labelsize=14
+)
+
+
+# ============================================================
+# 21. Grid
+# ============================================================
+
+ax.grid(
+    True,
+    linestyle="--",
+    linewidth=0.6,
+    alpha=0.5
+)
+
+
+# ============================================================
+# 22. Legend
+# ============================================================
+
+ax.legend(
+    loc="lower right",
+    fontsize=13,
+    frameon=True
+)
+
+
+# ============================================================
+# 23. Tight layout
+# ============================================================
+
+plt.tight_layout()
+
+
+# ============================================================
+# 24. Save 600 DPI PNG
+# ============================================================
+
+fig.savefig(
+    "MalVEIT_Malimg_ROC_600dpi.png",
+    dpi=600,
+    bbox_inches="tight",
+    pad_inches=0.08,
+    facecolor="white",
+    edgecolor="none"
+)
+
+
+# ============================================================
+# 25. Save 300 DPI PNG
+# ============================================================
+
+fig.savefig(
+    "MalVEIT_Malimg_ROC_300dpi.png",
+    dpi=300,
+    bbox_inches="tight",
+    pad_inches=0.08,
+    facecolor="white",
+    edgecolor="none"
+)
+
+
+# ============================================================
+# 26. Save vector PDF
+# ============================================================
+
+fig.savefig(
+    "MalVEIT_Malimg_ROC.pdf",
+    bbox_inches="tight",
+    pad_inches=0.08,
+    facecolor="white",
+    edgecolor="none"
+)
+
+
+# ============================================================
+# 27. Display
+# ============================================================
+
+plt.show()
+
+
+# ============================================================
+# 28. Final message
+# ============================================================
+
+print("\n==============================================")
+print("ROC CURVE GENERATED SUCCESSFULLY")
+print("==============================================")
+
+print(
+    "Macro AUROC:",
+    f"{macro_auc:.4f}"
+)
+
+print(
+    "Micro AUROC:",
+    f"{micro_auc:.4f}"
+)
+
+print(
+    "\nSaved files:"
+)
+
+print(
+    "1. MalVEIT_Malimg_ROC_600dpi.png"
+)
+
+print(
+    "2. MalVEIT_Malimg_ROC_300dpi.png"
+)
+
+print(
+    "3. MalVEIT_Malimg_ROC.pdf"
+)
+
 
